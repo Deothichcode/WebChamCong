@@ -1,0 +1,184 @@
+{% extends "base.html" %}
+
+{% block title %}Nhận diện khuôn mặt - Hệ thống điểm danh{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="row">
+        <div class="col-md-8 mx-auto">
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="text-center">Nhận diện khuôn mặt</h3>
+                </div>
+                <div class="card-body">
+                    <div class="alert alert-info">
+                        <h5>Hướng dẫn:</h5>
+                        <ol>
+                            <li>Đảm bảo khuôn mặt của bạn nằm trong khung camera</li>
+                            <li>Khi hệ thống yêu cầu, hãy thực hiện hành động được chỉ định</li>
+                            <li>Giữ nguyên tư thế cho đến khi hệ thống xác nhận</li>
+                        </ol>
+                    </div>
+
+                    <div class="text-center mb-3">
+                        <div id="action-instruction" class="alert alert-warning">
+                            Vui lòng nhìn thẳng vào camera
+                        </div>
+                    </div>
+
+                    <div class="text-center mb-3">
+                        <video id="video" width="640" height="480" autoplay></video>
+                        <canvas id="canvas" width="640" height="480" style="display:none;"></canvas>
+                    </div>
+
+                    <div class="text-center">
+                        <button id="capture" class="btn btn-primary">Chụp ảnh</button>
+                    </div>
+
+                    <div id="result" class="mt-3"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let video = document.getElementById('video');
+let canvas = document.getElementById('canvas');
+let captureButton = document.getElementById('capture');
+let resultDiv = document.getElementById('result');
+let actionInstruction = document.getElementById('action-instruction');
+let stream = null;
+let isProcessing = false;
+let currentAction = 'straight'; // straight, smile, blink
+let actionSequence = ['straight', 'smile', 'blink'];
+let currentActionIndex = 0;
+let capturedImages = {};
+
+// Yêu cầu truy cập camera
+navigator.mediaDevices.getUserMedia({ video: true })
+    .then(function(mediaStream) {
+        stream = mediaStream;
+        video.srcObject = stream;
+    })
+    .catch(function(err) {
+        console.error("Lỗi khi truy cập camera:", err);
+        resultDiv.innerHTML = '<div class="alert alert-danger">Không thể truy cập camera. Vui lòng kiểm tra quyền truy cập.</div>';
+    });
+
+// Hàm chụp ảnh
+captureButton.addEventListener('click', function() {
+    if (isProcessing) return;
+    isProcessing = true;
+    
+    // Chụp ảnh từ video
+    canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+    let imageData = canvas.toDataURL('image/jpeg');
+    
+    // Lưu ảnh đã chụp
+    capturedImages[currentAction] = imageData;
+    
+    // Hiển thị thông báo
+    resultDiv.innerHTML = '<div class="alert alert-success">Đã chụp ảnh thành công!</div>';
+    
+    // Chuyển sang hành động tiếp theo hoặc gửi dữ liệu
+    currentActionIndex++;
+    if (currentActionIndex < actionSequence.length) {
+        currentAction = actionSequence[currentActionIndex];
+        updateActionInstruction();
+        setTimeout(() => {
+            isProcessing = false;
+            resultDiv.innerHTML = '';
+        }, 2000);
+    } else {
+        // Gửi tất cả ảnh đã chụp lên server
+        sendImagesToServer();
+    }
+});
+
+function updateActionInstruction() {
+    switch(currentAction) {
+        case 'straight':
+            actionInstruction.textContent = 'Vui lòng nhìn thẳng vào camera';
+            break;
+        case 'smile':
+            actionInstruction.textContent = 'Vui lòng mỉm cười';
+            break;
+        case 'blink':
+            actionInstruction.textContent = 'Vui lòng nháy mắt';
+            break;
+    }
+}
+
+function sendImagesToServer() {
+    let formData = new FormData();
+    for (let action in capturedImages) {
+        // Chuyển đổi base64 thành Blob
+        let imageBlob = dataURItoBlob(capturedImages[action]);
+        formData.append(action, imageBlob, action + '.jpg');
+    }
+    
+    fetch('/check_attendance', {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            resultDiv.innerHTML = '<div class="alert alert-success">' + data.message + '</div>';
+            setTimeout(() => {
+                window.location.href = '/employee/dashboard';
+            }, 2000);
+        } else {
+            resultDiv.innerHTML = '<div class="alert alert-danger">' + data.error + '</div>';
+            setTimeout(() => {
+                resetProcess();
+            }, 3000);
+        }
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        resultDiv.innerHTML = '<div class="alert alert-danger">Có lỗi xảy ra. Vui lòng thử lại.</div>';
+        setTimeout(() => {
+            resetProcess();
+        }, 3000);
+    });
+}
+
+function dataURItoBlob(dataURI) {
+    // Chuyển đổi base64 thành binary
+    let byteString = atob(dataURI.split(',')[1]);
+    
+    // Tách MIME type
+    let mimeString = dataURI.split(',')[0].split(':')[1].split(';')[0];
+    
+    // Tạo array buffer
+    let ab = new ArrayBuffer(byteString.length);
+    let ia = new Uint8Array(ab);
+    for (let i = 0; i < byteString.length; i++) {
+        ia[i] = byteString.charCodeAt(i);
+    }
+    
+    // Trả về blob
+    return new Blob([ab], {type: mimeString});
+}
+
+function resetProcess() {
+    currentActionIndex = 0;
+    currentAction = actionSequence[0];
+    capturedImages = {};
+    isProcessing = false;
+    resultDiv.innerHTML = '';
+    updateActionInstruction();
+}
+
+// Dừng camera khi rời khỏi trang
+window.addEventListener('beforeunload', function() {
+    if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+    }
+});
+</script>
+{% endblock %} 

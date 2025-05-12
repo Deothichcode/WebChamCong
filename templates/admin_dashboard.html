@@ -1,0 +1,503 @@
+{% extends "base.html" %}
+
+{% block title %}Bảng điều khiển Admin - Hệ thống điểm danh nhận diện khuôn mặt{% endblock %}
+
+{% block content %}
+<!-- Thêm CSRF token -->
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+<div class="row mb-4">
+    <div class="col">
+        <h2>Bảng điều khiển Admin</h2>
+    </div>
+    <div class="col text-end">
+        <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addEmployeeModal">
+            Thêm nhân viên mới
+        </button>
+    </div>
+</div>
+
+<!-- Navigation tabs -->
+<ul class="nav nav-tabs mb-4" id="adminTabs" role="tablist">
+    <li class="nav-item" role="presentation">
+        <button class="nav-link active" id="attendance-tab" data-bs-toggle="tab" data-bs-target="#attendance" type="button" role="tab">
+            Bản ghi điểm danh
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link" id="employees-tab" data-bs-toggle="tab" data-bs-target="#employees" type="button" role="tab">
+            Danh sách nhân viên
+        </button>
+    </li>
+</ul>
+
+<!-- Tab content -->
+<div class="tab-content" id="adminTabContent">
+    <!-- Attendance Records Tab -->
+    <div class="tab-pane fade show active" id="attendance" role="tabpanel">
+        <div class="card mb-4">
+            <div class="card-header">
+                <h4>Bản ghi điểm danh</h4>
+            </div>
+            <div class="card-body">
+                <form method="GET" action="{{ url_for('admin_dashboard') }}" class="mb-4">
+                    <div class="row">
+                        <div class="col-md-3">
+                            <div class="mb-3">
+                                <label for="date_filter" class="form-label">Lọc theo ngày</label>
+                                <input type="date" class="form-control" id="date_filter" name="date" value="{{ current_filters.date }}">
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="mb-3">
+                                <label for="month_filter" class="form-label">Lọc theo tháng</label>
+                                <input type="month" class="form-control" id="month_filter" name="month" value="{{ current_filters.month }}">
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="mb-3">
+                                <label for="employee_id_filter" class="form-label">Mã nhân viên</label>
+                                <input type="text" class="form-control" id="employee_id_filter" name="employee_id" value="{{ current_filters.employee_id }}" placeholder="Tìm kiếm theo mã">
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="mb-3">
+                                <label for="department_filter" class="form-label">Phòng ban</label>
+                                <select class="form-select" id="department_filter" name="department">
+                                    <option value="">Tất cả phòng ban</option>
+                                    {% for dept in departments %}
+                                        <option value="{{ dept }}" {% if dept == current_filters.department %}selected{% endif %}>{{ dept }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col text-end">
+                            <button type="submit" class="btn btn-primary">Áp dụng bộ lọc</button>
+                            <a href="{{ url_for('export_attendance', date=current_filters.date, month=current_filters.month, employee_id=current_filters.employee_id, department=current_filters.department) }}" class="btn btn-success">Xuất Excel</a>
+                        </div>
+                    </div>
+                </form>
+
+                <div class="table-responsive">
+                    <table class="table table-striped">
+                        <thead>
+                            <tr>
+                                <th>Mã nhân viên</th>
+                                <th>Họ tên</th>
+                                <th>Phòng ban</th>
+                                <th>Ngày</th>
+                                <th>Giờ</th>
+                                <th>Trạng thái</th>
+                                <th>Điểm danh muộn</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for record in attendance_records %}
+                            <tr>
+                                <td>{{ record.user.employee_id }}</td>
+                                <td>{{ record.user.full_name }}</td>
+                                <td>{{ record.user.department }}</td>
+                                <td>{{ record.check_in_time.strftime('%Y-%m-%d') }}</td>
+                                <td>{{ record.check_in_time.strftime('%H:%M:%S') }}</td>
+                                <td>{% if record.status == 'Present' %}Có mặt{% else %}{{ record.status }}{% endif %}</td>
+                                <td>
+                                    {% if record.check_in_time.hour >= 9 %}
+                                        <span class="badge bg-warning">Điểm danh muộn</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Employee List Tab -->
+    <div class="tab-pane fade" id="employees" role="tabpanel">
+        <div class="card">
+            <div class="card-header">
+                <h4>Danh sách nhân viên</h4>
+            </div>
+            <div class="card-body">
+                <form method="GET" action="{{ url_for('admin_dashboard') }}" class="mb-4" id="employeeFilterForm">
+                    <input type="hidden" name="active_tab" value="employees">
+                    <div class="row">
+                        <div class="col-md-4">
+                            <div class="mb-3">
+                                <label for="employee_search" class="form-label">Tìm kiếm theo mã nhân viên</label>
+                                <input type="text" class="form-control" id="employee_search" name="employee_search" 
+                                       value="{{ employee_filters.search if employee_filters else '' }}" 
+                                       placeholder="Nhập mã nhân viên">
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="mb-3">
+                                <label for="employee_department" class="form-label">Lọc theo phòng ban</label>
+                                <select class="form-select" id="employee_department" name="employee_department">
+                                    <option value="">Tất cả phòng ban</option>
+                                    {% for dept in departments %}
+                                        <option value="{{ dept }}" 
+                                            {% if employee_filters and dept == employee_filters.department %}selected{% endif %}>
+                                            {{ dept }}
+                                        </option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="mb-3">
+                                <label for="employee_month" class="form-label">Lọc theo tháng </label>
+                                <input type="month" class="form-control" id="employee_month" name="employee_month" value="{{ employee_filters.month if employee_filters and employee_filters.month else '' }}">
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="mb-3 d-flex align-items-end">
+                                <div class="flex-grow-1">
+                                    <button type="submit" class="btn btn-primary w-100">Áp dụng bộ lọc</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </form>
+                <div class="text-end mb-3">
+                    <a href="{{ url_for('export_employees', 
+                              search=employee_filters.search if employee_filters else '', 
+                              department=employee_filters.department if employee_filters else '') }}" 
+                       class="btn btn-success">Xuất danh sách nhân viên</a>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-striped">
+                        <thead>
+                            <tr>
+                                <th>Mã nhân viên</th>
+                                <th>Họ tên</th>
+                                <th>Tên đăng nhập</th>
+                                <th>Phòng ban</th>
+                                <th>Ngày sinh</th>
+                                <th>Tổng số buổi điểm danh</th>
+                                <th>Số buổi điểm danh muộn</th>
+                                <th>Thao tác</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for employee in employees %}
+                            <tr>
+                                <td>{{ employee.employee_id }}</td>
+                                <td>{{ employee.full_name }}</td>
+                                <td>{{ employee.username }}</td>
+                                <td>{{ employee.department }}</td>
+                                <td>{{ employee.date_of_birth.strftime('%Y-%m-%d') }}</td>
+                                <td>{{ employee.total_attendance }}</td>
+                                <td>
+                                    {% if employee.late_count > 0 %}
+                                    <span class="text-danger">{{ employee.late_count }}</span>
+                                    {% else %}
+                                    <span class="text-success">0</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <button class="btn btn-sm btn-info edit-employee" data-employee-id="{{ employee.id }}">Sửa</button>
+                                    <button class="btn btn-sm btn-danger delete-employee" data-employee-id="{{ employee.id }}">Xóa</button>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Add Employee Modal -->
+<div class="modal fade" id="addEmployeeModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Thêm nhân viên mới</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div id="addEmployeeError" class="alert alert-danger" style="display: none;"></div>
+                <form id="addEmployeeForm" method="POST" action="{{ url_for('add_employee') }}" enctype="multipart/form-data" onsubmit="return validateAddEmployeeForm()">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <div class="mb-3">
+                        <label for="username" class="form-label">Tên đăng nhập <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control" id="username" name="username" required>
+                        <div class="invalid-feedback">Vui lòng nhập tên đăng nhập</div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="password" class="form-label">Mật khẩu <span class="text-danger">*</span></label>
+                        <input type="password" class="form-control" id="password" name="password" required>
+                        <div class="invalid-feedback">Vui lòng nhập mật khẩu</div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="employee_id" class="form-label">Mã nhân viên <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control" id="employee_id" name="employee_id" required>
+                        <div class="invalid-feedback">Vui lòng nhập mã nhân viên</div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="full_name" class="form-label">Họ tên <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control" id="full_name" name="full_name" required>
+                        <div class="invalid-feedback">Vui lòng nhập họ tên</div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="date_of_birth" class="form-label">Ngày sinh <span class="text-danger">*</span></label>
+                        <input type="date" class="form-control" id="date_of_birth" name="date_of_birth" required>
+                        <div class="invalid-feedback">Vui lòng chọn ngày sinh</div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="department" class="form-label">Phòng ban <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control" id="department" name="department" required>
+                        <div class="invalid-feedback">Vui lòng nhập phòng ban</div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="face_image" class="form-label">Ảnh khuôn mặt <span class="text-danger">*</span></label>
+                        <input type="file" class="form-control" id="face_image" name="face_image" accept="image/*" required>
+                        <div class="invalid-feedback">Vui lòng chọn ảnh khuôn mặt</div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Đóng</button>
+                <button type="submit" form="addEmployeeForm" class="btn btn-primary">Thêm nhân viên</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Edit Employee Modal -->
+<div class="modal fade" id="editEmployeeModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Sửa thông tin nhân viên</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="editEmployeeForm" method="POST" enctype="multipart/form-data">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" id="edit_employee_id" name="employee_id">
+                    <div class="mb-3">
+                        <label for="edit_username" class="form-label">Tên đăng nhập</label>
+                        <input type="text" class="form-control" id="edit_username" name="username" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="edit_password" class="form-label">Mật khẩu mới (để trống nếu giữ nguyên)</label>
+                        <input type="password" class="form-control" id="edit_password" name="password">
+                    </div>
+                    <div class="mb-3">
+                        <label for="edit_employee_id_field" class="form-label">Mã nhân viên</label>
+                        <input type="text" class="form-control" id="edit_employee_id_field" name="employee_id" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="edit_full_name" class="form-label">Họ tên</label>
+                        <input type="text" class="form-control" id="edit_full_name" name="full_name" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="edit_date_of_birth" class="form-label">Ngày sinh</label>
+                        <input type="date" class="form-control" id="edit_date_of_birth" name="date_of_birth" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="edit_department" class="form-label">Phòng ban</label>
+                        <input type="text" class="form-control" id="edit_department" name="department" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="edit_face_image" class="form-label">Ảnh khuôn mặt mới (tùy chọn)</label>
+                        <input type="file" class="form-control" id="edit_face_image" name="face_image" accept="image/*">
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Đóng</button>
+                <button type="button" class="btn btn-primary" id="saveEditButton">Lưu thay đổi</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Lưu tab đang active vào localStorage
+    const activeTab = localStorage.getItem('activeAdminTab');
+    if (activeTab) {
+        const tab = new bootstrap.Tab(document.querySelector(activeTab));
+        tab.show();
+    }
+
+    // Lưu tab được chọn vào localStorage khi chuyển tab
+    document.querySelectorAll('button[data-bs-toggle="tab"]').forEach(button => {
+        button.addEventListener('click', function() {
+            localStorage.setItem('activeAdminTab', `#${this.id}`);
+        });
+    });
+
+    const editModal = new bootstrap.Modal(document.getElementById('editEmployeeModal'));
+    
+    // Edit employee
+    document.querySelectorAll('.edit-employee').forEach(button => {
+        button.addEventListener('click', function() {
+            const employeeId = this.dataset.employeeId;
+            
+            // Fetch employee data
+            fetch(`/get_employee/${employeeId}`)
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('edit_employee_id').value = data.id;
+                    document.getElementById('edit_username').value = data.username;
+                    document.getElementById('edit_employee_id_field').value = data.employee_id;
+                    document.getElementById('edit_full_name').value = data.full_name;
+                    document.getElementById('edit_date_of_birth').value = data.date_of_birth;
+                    document.getElementById('edit_department').value = data.department;
+                    
+                    // Clear password and face image fields
+                    document.getElementById('edit_password').value = '';
+                    document.getElementById('edit_face_image').value = '';
+                    
+                    editModal.show();
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    alert('Lỗi khi tải dữ liệu nhân viên');
+                });
+        });
+    });
+    
+    // Save edited employee
+    document.getElementById('saveEditButton').addEventListener('click', function() {
+        const form = document.getElementById('editEmployeeForm');
+        const formData = new FormData(form);
+        const employeeId = document.getElementById('edit_employee_id').value;
+        
+        fetch(`/update_employee/${employeeId}`, {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                editModal.hide();
+                location.reload();
+            } else {
+                alert(data.error || 'Lỗi khi cập nhật nhân viên');
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            alert('Lỗi khi cập nhật nhân viên');
+        });
+    });
+
+    // Lấy CSRF token từ thẻ meta
+    const csrfToken = document.querySelector('input[name="csrf_token"]').value;
+
+    // Delete employee
+    document.querySelectorAll('.delete-employee').forEach(button => {
+        button.addEventListener('click', function() {
+            const employeeId = this.dataset.employeeId;
+            const row = this.closest('tr');
+            const employeeName = row.querySelector('td:nth-child(2)').textContent; // Lấy tên nhân viên
+
+            if (confirm(`Bạn có chắc chắn muốn xóa nhân viên "${employeeName}"?\nMọi dữ liệu điểm danh của nhân viên này cũng sẽ bị xóa.`)) {
+                fetch(`/delete_employee/${employeeId}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': csrfToken
+                    }
+                })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Network response was not ok');
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    if (data.success) {
+                        // Xóa dòng của nhân viên khỏi bảng
+                        row.remove();
+                        // Hiển thị thông báo thành công
+                        alert(data.message || 'Đã xóa nhân viên thành công');
+                    } else {
+                        throw new Error(data.error || 'Lỗi khi xóa nhân viên');
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    alert(error.message || 'Lỗi khi xóa nhân viên');
+                });
+            }
+        });
+    });
+
+    // Clear month filter when date is selected and vice versa
+    document.getElementById('date_filter').addEventListener('change', function() {
+        if (this.value) {
+            document.getElementById('month_filter').value = '';
+        }
+    });
+
+    document.getElementById('month_filter').addEventListener('change', function() {
+        if (this.value) {
+            document.getElementById('date_filter').value = '';
+        }
+    });
+});
+
+function validateAddEmployeeForm() {
+    const form = document.getElementById('addEmployeeForm');
+    const errorDiv = document.getElementById('addEmployeeError');
+    let isValid = true;
+    
+    // Reset previous validation states
+    form.querySelectorAll('.is-invalid').forEach(element => {
+        element.classList.remove('is-invalid');
+    });
+    errorDiv.style.display = 'none';
+    
+    // Check all required fields
+    const requiredFields = ['username', 'password', 'employee_id', 'full_name', 'date_of_birth', 'department', 'face_image'];
+    const emptyFields = [];
+    
+    requiredFields.forEach(fieldName => {
+        const field = document.getElementById(fieldName);
+        if (!field.value.trim()) {
+            field.classList.add('is-invalid');
+            emptyFields.push(fieldName);
+            isValid = false;
+        }
+    });
+    
+    if (!isValid) {
+        errorDiv.textContent = 'Vui lòng điền đầy đủ thông tin cho các trường bắt buộc';
+        errorDiv.style.display = 'block';
+        return false;
+    }
+    
+    return true;
+}
+
+// Add event listeners for real-time validation
+document.addEventListener('DOMContentLoaded', function() {
+    const form = document.getElementById('addEmployeeForm');
+    const fields = form.querySelectorAll('input[required]');
+    
+    fields.forEach(field => {
+        field.addEventListener('input', function() {
+            if (this.value.trim()) {
+                this.classList.remove('is-invalid');
+            } else {
+                this.classList.add('is-invalid');
+            }
+        });
+    });
+});
+</script>
+{% endblock %} 

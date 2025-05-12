@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+
+{% block title %}Trang chủ - Hệ thống điểm danh nhận diện khuôn mặt{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-8 text-center">
+        <h1 class="mb-4">Chào mừng đến với hệ thống điểm danh</h1>
+        <p class="lead mb-4">Hệ thống điểm danh tự động sử dụng công nghệ nhận diện khuôn mặt</p>
+        
+        {% if current_user.is_authenticated %}
+            {% if current_user.is_admin %}
+                <a href="{{ url_for('admin_dashboard') }}" class="btn btn-primary btn-lg">Bảng điều khiển Admin</a>
+            {% else %}
+                <a href="{{ url_for('employee_dashboard') }}" class="btn btn-primary btn-lg">Bảng điều khiển</a>
+            {% endif %}
+        {% else %}
+            <a href="{{ url_for('login') }}" class="btn btn-primary btn-lg">Đăng nhập</a>
+        {% endif %}
+    </div>
+</div>
+{% endblock %} 
