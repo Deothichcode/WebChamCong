@@ -12,6 +12,8 @@ from io import BytesIO
 import pytz
 from flask_wtf.csrf import CSRFProtect
 import base64
+import io
+from PIL import Image
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your-secret-key'
@@ -39,6 +41,29 @@ class User(UserMixin, db.Model):
     face_encoding = db.Column(db.PickleType, nullable=True)
     is_admin = db.Column(db.Boolean, default=False)
     attendance_records = db.relationship('Attendance', backref='user', lazy=True)
+
+    def get_face_image(self):
+        """Trả về ảnh khuôn mặt dưới dạng base64 string"""
+        if not hasattr(self, '_face_image'):
+            self._face_image = None
+            if self.face_encoding is not None:
+                try:
+                    # Tạo ảnh trống với kích thước 96x96
+                    img = np.zeros((96, 96, 3), dtype=np.uint8)
+                    # Chuyển encoding về dạng ảnh
+                    face_array = np.array(self.face_encoding).reshape((96, 96, 3))
+                    # Normalize về range 0-255
+                    face_array = ((face_array - face_array.min()) * (255/(face_array.max() - face_array.min()))).astype('uint8')
+                    # Chuyển sang PIL Image
+                    img = Image.fromarray(face_array)
+                    # Chuyển sang base64
+                    img_byte_arr = io.BytesIO()
+                    img.save(img_byte_arr, format='PNG')
+                    img_byte_arr = img_byte_arr.getvalue()
+                    self._face_image = base64.b64encode(img_byte_arr).decode()
+                except Exception as e:
+                    print(f"Error converting face encoding to image: {str(e)}")
+        return self._face_image
 
 class Attendance(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -367,29 +392,21 @@ def add_employee():
             flash(f'Vui lòng điền đầy đủ thông tin cho trường {field}', 'error')
             return redirect(url_for('admin_dashboard'))
 
-    # Kiểm tra file ảnh
-    if 'face_image' not in request.files:
-        flash('Vui lòng chọn ảnh khuôn mặt', 'error')
-        return redirect(url_for('admin_dashboard'))
-
-    face_image = request.files['face_image']
-    if face_image.filename == '':
-        flash('Vui lòng chọn ảnh khuôn mặt', 'error')
+    # Kiểm tra dữ liệu ảnh
+    face_image_data = request.form.get('face_image_data')
+    if not face_image_data:
+        flash('Vui lòng chụp ảnh khuôn mặt', 'error')
         return redirect(url_for('admin_dashboard'))
 
     try:
-        # Kiểm tra username và employee_id đã tồn tại chưa
-        if User.query.filter_by(username=request.form['username']).first():
-            flash('Tên đăng nhập đã tồn tại', 'error')
-            return redirect(url_for('admin_dashboard'))
+        # Xử lý ảnh từ base64
+        image_data = face_image_data.split(',')[1]
+        nparr = np.frombuffer(base64.b64decode(image_data), np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        rgb_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         
-        if User.query.filter_by(employee_id=request.form['employee_id']).first():
-            flash('Mã nhân viên đã tồn tại', 'error')
-            return redirect(url_for('admin_dashboard'))
-
-        # Xử lý ảnh khuôn mặt
-        img = face_recognition.load_image_file(face_image)
-        face_locations = face_recognition.face_locations(img)
+        # Phát hiện khuôn mặt
+        face_locations = face_recognition.face_locations(rgb_img)
         
         if not face_locations:
             flash('Không phát hiện khuôn mặt trong ảnh', 'error')
@@ -399,7 +416,16 @@ def add_employee():
             flash('Chỉ được phép có một khuôn mặt trong ảnh', 'error')
             return redirect(url_for('admin_dashboard'))
 
-        face_encoding = face_recognition.face_encodings(img, face_locations)[0]
+        face_encoding = face_recognition.face_encodings(rgb_img, face_locations)[0]
+
+        # Kiểm tra username và employee_id đã tồn tại chưa
+        if User.query.filter_by(username=request.form['username']).first():
+            flash('Tên đăng nhập đã tồn tại', 'error')
+            return redirect(url_for('admin_dashboard'))
+        
+        if User.query.filter_by(employee_id=request.form['employee_id']).first():
+            flash('Mã nhân viên đã tồn tại', 'error')
+            return redirect(url_for('admin_dashboard'))
 
         # Kiểm tra khuôn mặt trùng lặp với các nhân viên khác
         existing_users = User.query.filter(User.face_encoding.isnot(None)).all()
@@ -464,69 +490,83 @@ def delete_employee(employee_id):
 @app.route('/export_attendance')
 @login_required
 def export_attendance():
-    # Lấy múi giờ Việt Nam
-    vietnam_tz = pytz.timezone('Asia/Ho_Chi_Minh')
-    
-    if not current_user.is_admin:
-        # Đối với người dùng không phải admin, chỉ hiển thị bản ghi của chính họ
-        attendance_records = Attendance.query.filter_by(user_id=current_user.id).all()
-    else:
-        # Đối với admin, áp dụng bộ lọc tương tự như bảng điều khiển
-        query = Attendance.query.join(User)
+    try:
+        # Lấy múi giờ Việt Nam
+        vietnam_tz = pytz.timezone('Asia/Ho_Chi_Minh')
         
-        date_filter = request.args.get('date')
-        month_filter = request.args.get('month')
-        employee_id_filter = request.args.get('employee_id')
-        department_filter = request.args.get('department')
-        
-        if date_filter:
-            query = query.filter(db.func.date(Attendance.check_in_time) == datetime.strptime(date_filter, '%Y-%m-%d').date())
-        elif month_filter:
-            month_date = datetime.strptime(month_filter, '%Y-%m')
-            query = query.filter(
-                db.func.extract('year', Attendance.check_in_time) == month_date.year,
-                db.func.extract('month', Attendance.check_in_time) == month_date.month
-            )
-        
-        if employee_id_filter:
-            query = query.filter(User.employee_id == employee_id_filter)
-        
-        if department_filter:
-            query = query.filter(User.department == department_filter)
+        if not current_user.is_admin:
+            # Đối với người dùng không phải admin, chỉ hiển thị bản ghi của chính họ
+            attendance_records = Attendance.query.filter_by(user_id=current_user.id).all()
+        else:
+            # Đối với admin, áp dụng bộ lọc tương tự như bảng điều khiển
+            query = Attendance.query.join(User)
             
-        attendance_records = query.order_by(Attendance.check_in_time.desc()).all()
-    
-    # Tạo DataFrame
-    data = []
-    for record in attendance_records:
-        # Chuyển đổi thời gian sang múi giờ Việt Nam
-        local_time = record.check_in_time.astimezone(vietnam_tz)
+            date_filter = request.args.get('date')
+            month_filter = request.args.get('month')
+            employee_id_filter = request.args.get('employee_id')
+            department_filter = request.args.get('department')
+            
+            if date_filter:
+                query = query.filter(db.func.date(Attendance.check_in_time) == datetime.strptime(date_filter, '%Y-%m-%d').date())
+            elif month_filter:
+                month_date = datetime.strptime(month_filter, '%Y-%m')
+                query = query.filter(
+                    db.func.extract('year', Attendance.check_in_time) == month_date.year,
+                    db.func.extract('month', Attendance.check_in_time) == month_date.month
+                )
+            
+            if employee_id_filter:
+                query = query.filter(User.employee_id == employee_id_filter)
+            
+            if department_filter:
+                query = query.filter(User.department == department_filter)
+                
+            attendance_records = query.order_by(Attendance.check_in_time.desc()).all()
         
-        user = User.query.get(record.user_id)
-        data.append({
-            'Mã nhân viên': user.employee_id,
-            'Họ tên': user.full_name,
-            'Phòng ban': user.department,
-            'Ngày': local_time.strftime('%d/%m/%Y'),
-            'Thời gian': local_time.strftime('%H:%M:%S'),
-            'Trạng thái': 'Có mặt'
-        })
-    
-    df = pd.DataFrame(data)
-    
-    # Tạo file Excel trong bộ nhớ
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        # Tạo DataFrame
+        data = []
+        for record in attendance_records:
+            # Chuyển đổi thời gian sang múi giờ Việt Nam
+            local_time = record.check_in_time.astimezone(vietnam_tz)
+            
+            user = User.query.get(record.user_id)
+            data.append({
+                'Mã nhân viên': user.employee_id,
+                'Họ tên': user.full_name,
+                'Phòng ban': user.department,
+                'Ngày': local_time.strftime('%d/%m/%Y'),
+                'Thời gian': local_time.strftime('%H:%M:%S'),
+                'Trạng thái': 'Có mặt'
+            })
+        
+        df = pd.DataFrame(data)
+        
+        # Tạo một BytesIO object để lưu file Excel
+        output = BytesIO()
+        
+        # Sử dụng ExcelWriter với engine='xlsxwriter'
+        writer = pd.ExcelWriter(output, engine='xlsxwriter')
         df.to_excel(writer, index=False, sheet_name='Điểm danh')
-    
-    output.seek(0)
-    
-    return send_file(
-        output,
-        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        as_attachment=True,
-        download_name='diem_danh.xlsx'
-    )
+        
+        # Lưu file và đóng writer
+        writer.close()
+        
+        # Seek về đầu file
+        output.seek(0)
+        
+        # Tạo tên file với timestamp
+        filename = f'diem_danh_{datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx'
+        
+        return send_file(
+            output,
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            as_attachment=True,
+            download_name=filename
+        )
+        
+    except Exception as e:
+        print(f"Error exporting attendance: {str(e)}")
+        return "Lỗi khi xuất file Excel", 500
 
 @app.route('/get_employee/<int:employee_id>')
 @login_required
@@ -534,15 +574,19 @@ def get_employee(employee_id):
     if not current_user.is_admin:
         return jsonify({'error': 'Unauthorized'}), 403
     
-    employee = User.query.get_or_404(employee_id)
-    return jsonify({
-        'id': employee.id,
-        'username': employee.username,
-        'employee_id': employee.employee_id,
-        'full_name': employee.full_name,
-        'date_of_birth': employee.date_of_birth.strftime('%Y-%m-%d'),
-        'department': employee.department
-    })
+    try:
+        employee = User.query.get_or_404(employee_id)
+        return jsonify({
+            'id': employee.id,
+            'username': employee.username,
+            'employee_id': employee.employee_id,
+            'full_name': employee.full_name,
+            'date_of_birth': employee.date_of_birth.strftime('%Y-%m-%d'),
+            'department': employee.department
+        })
+    except Exception as e:
+        print(f"Error in get_employee: {str(e)}")
+        return jsonify({'error': 'Lỗi khi tải dữ liệu nhân viên'}), 500
 
 @app.route('/update_employee/<int:employee_id>', methods=['POST'])
 @login_required
@@ -553,98 +597,150 @@ def update_employee(employee_id):
     employee = User.query.get_or_404(employee_id)
     
     try:
+        # Kiểm tra xem employee_id mới có bị trùng không
+        new_employee_id = request.form.get('employee_id')
+        if new_employee_id != employee.employee_id:
+            existing_employee = User.query.filter_by(employee_id=new_employee_id).first()
+            if existing_employee:
+                return jsonify({'error': 'Mã nhân viên đã tồn tại'}), 400
+
+        # Kiểm tra xem username mới có bị trùng không
+        new_username = request.form.get('username')
+        if new_username != employee.username:
+            existing_user = User.query.filter_by(username=new_username).first()
+            if existing_user:
+                return jsonify({'error': 'Tên đăng nhập đã tồn tại'}), 400
+
+        # Lưu các giá trị cũ
+        old_username = employee.username
+        old_password_hash = employee.password_hash
+
         # Cập nhật thông tin cơ bản
-        employee.username = request.form.get('username')
-        # Không cho phép thay đổi mã nhân viên
-        # employee.employee_id = request.form.get('employee_id')
+        employee.username = new_username
+        employee.employee_id = new_employee_id
         employee.full_name = request.form.get('full_name')
         employee.date_of_birth = datetime.strptime(request.form.get('date_of_birth'), '%Y-%m-%d').date()
         employee.department = request.form.get('department')
         
-        # Cập nhật mật khẩu nếu cung cấp
+        # Cập nhật mật khẩu nếu có
         new_password = request.form.get('password')
         if new_password and new_password.strip():
             employee.password_hash = generate_password_hash(new_password)
         
-        # Cập nhật ảnh khuôn mặt nếu cung cấp
-        face_image = request.files.get('face_image')
-        if face_image:
-            img = cv2.imdecode(np.fromstring(face_image.read(), np.uint8), cv2.IMREAD_COLOR)
+        # Xử lý ảnh khuôn mặt mới nếu có
+        face_image_data = request.form.get('face_image_data')
+        if face_image_data and ',' in face_image_data:
+            # Lưu encoding cũ
+            old_face_encoding = employee.face_encoding
+            
+            # Xử lý ảnh từ base64
+            image_data = face_image_data.split(',')[1]
+            nparr = np.frombuffer(base64.b64decode(image_data), np.uint8)
+            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
             rgb_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            
+            # Phát hiện khuôn mặt
             face_locations = face_recognition.face_locations(rgb_img)
-            
             if not face_locations:
-                return jsonify({'error': 'No face detected in the image'}), 400
-            
+                return jsonify({'error': 'Không phát hiện khuôn mặt trong ảnh'}), 400
+                
+            if len(face_locations) > 1:
+                return jsonify({'error': 'Chỉ được phép có một khuôn mặt trong ảnh'}), 400
+
             face_encoding = face_recognition.face_encodings(rgb_img, face_locations)[0]
 
-            # Kiểm tra khuôn mặt trùng lặp với các nhân viên khác
+            # Kiểm tra khuôn mặt trùng lặp
             existing_users = User.query.filter(
                 User.face_encoding.isnot(None),
-                User.id != employee_id  # Loại trừ nhân viên hiện tại
+                User.id != employee_id
             ).all()
+            
             for user in existing_users:
                 if user.face_encoding is not None:
-                    # So sánh khuôn mặt với ngưỡng thấp hơn để phát hiện trùng lặp
                     matches = face_recognition.compare_faces([user.face_encoding], face_encoding, tolerance=0.4)
                     if any(matches):
-                        return jsonify({'error': 'Khuôn mặt này đã được đăng ký cho nhân viên khác. Vui lòng sử dụng khuôn mặt khác.'}), 400
-            
+                        return jsonify({'error': 'Khuôn mặt này đã được đăng ký cho nhân viên khác'}), 400
+
             employee.face_encoding = face_encoding
+
+        try:
+            db.session.commit()
+            return jsonify({'success': True, 'message': 'Cập nhật thông tin thành công'})
+        except Exception as e:
+            # Nếu có lỗi, rollback và khôi phục các giá trị cũ
+            db.session.rollback()
+            employee.username = old_username
+            employee.password_hash = old_password_hash
+            if face_image_data and ',' in face_image_data:
+                employee.face_encoding = old_face_encoding
+            db.session.refresh(employee)
+            raise e
         
-        db.session.commit()
-        return jsonify({'success': True, 'message': 'Employee updated successfully'})
     except Exception as e:
-        db.session.rollback()
-        return jsonify({'error': str(e)}), 400
+        print(f"Error in update_employee: {str(e)}")
+        return jsonify({'error': f'Lỗi khi cập nhật thông tin: {str(e)}'}), 500
 
 @app.route('/export_employees')
 @login_required
 def export_employees():
-    if not current_user.is_admin:
-        return jsonify({'error': 'Unauthorized'}), 403
-    
-    # Lấy tham số tìm kiếm và lọc
-    search = request.args.get('search')
-    department = request.args.get('department')
-    
-    # Query danh sách nhân viên với bộ lọc
-    query = User.query.filter_by(is_admin=False)
-    
-    if search:
-        query = query.filter(User.employee_id.ilike(f'%{search}%'))
-    
-    if department:
-        query = query.filter(User.department == department)
-    
-    employees = query.all()
-    
-    # Tạo DataFrame
-    data = []
-    for employee in employees:
-        data.append({
-            'Mã nhân viên': employee.employee_id,
-            'Họ tên': employee.full_name,
-            'Tên đăng nhập': employee.username,
-            'Phòng ban': employee.department,
-            'Ngày sinh': employee.date_of_birth.strftime('%Y-%m-%d')
-        })
-    
-    df = pd.DataFrame(data)
-    
-    # Tạo file Excel trong bộ nhớ
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+    try:
+        if not current_user.is_admin:
+            return "Unauthorized", 403
+        
+        # Lấy tham số tìm kiếm và lọc
+        search = request.args.get('search')
+        department = request.args.get('department')
+        
+        # Query danh sách nhân viên với bộ lọc
+        query = User.query.filter_by(is_admin=False)
+        
+        if search:
+            query = query.filter(User.employee_id.ilike(f'%{search}%'))
+        
+        if department:
+            query = query.filter(User.department == department)
+        
+        employees = query.all()
+        
+        # Tạo DataFrame
+        data = []
+        for employee in employees:
+            data.append({
+                'Mã nhân viên': employee.employee_id,
+                'Họ tên': employee.full_name,
+                'Tên đăng nhập': employee.username,
+                'Phòng ban': employee.department,
+                'Ngày sinh': employee.date_of_birth.strftime('%Y-%m-%d')
+            })
+        
+        df = pd.DataFrame(data)
+        
+        # Tạo một BytesIO object để lưu file Excel
+        output = BytesIO()
+        
+        # Sử dụng ExcelWriter với engine='xlsxwriter'
+        writer = pd.ExcelWriter(output, engine='xlsxwriter')
         df.to_excel(writer, index=False, sheet_name='Danh sách nhân viên')
-    
-    output.seek(0)
-    
-    return send_file(
-        output,
-        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        as_attachment=True,
-        download_name='danh_sach_nhan_vien.xlsx'
-    )
+        
+        # Lưu file và đóng writer
+        writer.close()
+        
+        # Seek về đầu file
+        output.seek(0)
+        
+        # Tạo tên file với timestamp
+        filename = f'danh_sach_nhan_vien_{datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx'
+        
+        return send_file(
+            output,
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            as_attachment=True,
+            download_name=filename
+        )
+        
+    except Exception as e:
+        print(f"Error exporting employees: {str(e)}")
+        return "Lỗi khi xuất file Excel", 500
 
 if __name__ == '__main__':
     with app.app_context():
@@ -662,4 +758,4 @@ if __name__ == '__main__':
             )
             db.session.add(admin)
             db.session.commit()
-    app.run() 
+    app.run()

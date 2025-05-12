@@ -256,9 +256,18 @@
                         <div class="invalid-feedback">Vui lòng nhập phòng ban</div>
                     </div>
                     <div class="mb-3">
-                        <label for="face_image" class="form-label">Ảnh khuôn mặt <span class="text-danger">*</span></label>
-                        <input type="file" class="form-control" id="face_image" name="face_image" accept="image/*" required>
-                        <div class="invalid-feedback">Vui lòng chọn ảnh khuôn mặt</div>
+                        <label class="form-label">Ảnh khuôn mặt <span class="text-danger">*</span></label>
+                        <div class="text-center mb-3">
+                            <video id="addEmployeeVideo" width="320" height="240" autoplay style="display: none;"></video>
+                            <canvas id="addEmployeeCanvas" width="320" height="240" style="display: none;"></canvas>
+                            <img id="capturedImage" class="mb-2" style="max-width: 320px; display: none;">
+                        </div>
+                        <div class="text-center">
+                            <button type="button" class="btn btn-secondary" id="startCamera">Mở camera</button>
+                            <button type="button" class="btn btn-primary" id="captureImage" style="display: none;">Chụp ảnh</button>
+                            <button type="button" class="btn btn-danger" id="retakeImage" style="display: none;">Chụp lại</button>
+                        </div>
+                        <input type="hidden" id="face_image_data" name="face_image_data">
                     </div>
                 </form>
             </div>
@@ -307,8 +316,23 @@
                         <input type="text" class="form-control" id="edit_department" name="department" required>
                     </div>
                     <div class="mb-3">
-                        <label for="edit_face_image" class="form-label">Ảnh khuôn mặt mới (tùy chọn)</label>
-                        <input type="file" class="form-control" id="edit_face_image" name="face_image" accept="image/*">
+                        <label class="form-label">Ảnh khuôn mặt mới (tùy chọn)</label>
+                        <div class="text-center mb-3">
+                            <video id="editEmployeeVideo" width="320" height="240" autoplay style="display: none;"></video>
+                            <canvas id="editEmployeeCanvas" width="320" height="240" style="display: none;"></canvas>
+                            <img id="editCapturedImage" class="mb-2" style="max-width: 320px; display: none;">
+                        </div>
+                        <div class="text-center">
+                            <button type="button" class="btn btn-secondary" id="editStartCamera">Mở camera</button>
+                            <button type="button" class="btn btn-primary" id="editCaptureImage" style="display: none;">Chụp ảnh</button>
+                            <button type="button" class="btn btn-danger" id="editRetakeImage" style="display: none;">Chụp lại</button>
+                        </div>
+                        <input type="hidden" id="edit_face_image_data" name="face_image_data">
+                    </div>
+                    <div class="mb-3 text-center">
+                        <img id="employeeFaceImage" src="" alt="Ảnh nhân viên" 
+                             style="max-width: 200px; max-height: 200px; display: none;" 
+                             class="img-thumbnail mb-3">
                     </div>
                 </form>
             </div>
@@ -346,10 +370,19 @@ document.addEventListener('DOMContentLoaded', function() {
         button.addEventListener('click', function() {
             const employeeId = this.dataset.employeeId;
             
-            // Fetch employee data
             fetch(`/get_employee/${employeeId}`)
-                .then(response => response.json())
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Network response was not ok');
+                    }
+                    return response.json();
+                })
                 .then(data => {
+                    if (data.error) {
+                        throw new Error(data.error);
+                    }
+                    
+                    // Điền dữ liệu vào form
                     document.getElementById('edit_employee_id').value = data.id;
                     document.getElementById('edit_username').value = data.username;
                     document.getElementById('edit_employee_id_field').value = data.employee_id;
@@ -357,15 +390,12 @@ document.addEventListener('DOMContentLoaded', function() {
                     document.getElementById('edit_date_of_birth').value = data.date_of_birth;
                     document.getElementById('edit_department').value = data.department;
                     
-                    // Clear password and face image fields
-                    document.getElementById('edit_password').value = '';
-                    document.getElementById('edit_face_image').value = '';
-                    
-                    editModal.show();
+                    // Hiển thị modal
+                    new bootstrap.Modal(document.getElementById('editEmployeeModal')).show();
                 })
                 .catch(error => {
                     console.error('Error:', error);
-                    alert('Lỗi khi tải dữ liệu nhân viên');
+                    alert('Lỗi khi tải dữ liệu nhân viên: ' + error.message);
                 });
         });
     });
@@ -375,6 +405,12 @@ document.addEventListener('DOMContentLoaded', function() {
         const form = document.getElementById('editEmployeeForm');
         const formData = new FormData(form);
         const employeeId = document.getElementById('edit_employee_id').value;
+        
+        // Thêm dữ liệu ảnh vào FormData nếu có
+        const faceImageData = document.getElementById('edit_face_image_data').value;
+        if (faceImageData) {
+            formData.set('face_image_data', faceImageData);
+        }
         
         fetch(`/update_employee/${employeeId}`, {
             method: 'POST',
@@ -499,5 +535,144 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     });
 });
+
+// Thêm vào phần script
+document.addEventListener('DOMContentLoaded', function() {
+    const startCamera = document.getElementById('startCamera');
+    const captureImage = document.getElementById('captureImage');
+    const retakeImage = document.getElementById('retakeImage');
+    const video = document.getElementById('addEmployeeVideo');
+    const canvas = document.getElementById('addEmployeeCanvas');
+    const capturedImage = document.getElementById('capturedImage');
+    const faceImageData = document.getElementById('face_image_data');
+    let stream = null;
+
+    startCamera.addEventListener('click', function() {
+        navigator.mediaDevices.getUserMedia({ video: true })
+            .then(function(s) {
+                stream = s;
+                video.srcObject = stream;
+                video.style.display = 'block';
+                startCamera.style.display = 'none';
+                captureImage.style.display = 'inline-block';
+            })
+            .catch(function(err) {
+                console.error("Error accessing camera:", err);
+                alert("Không thể truy cập camera. Vui lòng kiểm tra quyền truy cập.");
+            });
+    });
+
+    captureImage.addEventListener('click', function() {
+        canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+        const imageData = canvas.toDataURL('image/jpeg');
+        capturedImage.src = imageData;
+        faceImageData.value = imageData;
+        
+        video.style.display = 'none';
+        capturedImage.style.display = 'block';
+        captureImage.style.display = 'none';
+        retakeImage.style.display = 'inline-block';
+        
+        if (stream) {
+            stream.getTracks().forEach(track => track.stop());
+        }
+    });
+
+    retakeImage.addEventListener('click', function() {
+        faceImageData.value = '';
+        capturedImage.style.display = 'none';
+        retakeImage.style.display = 'none';
+        startCamera.style.display = 'inline-block';
+    });
+
+    // Cleanup when modal is closed
+    $('#addEmployeeModal').on('hidden.bs.modal', function () {
+        if (stream) {
+            stream.getTracks().forEach(track => track.stop());
+        }
+        video.style.display = 'none';
+        capturedImage.style.display = 'none';
+        faceImageData.value = '';
+        startCamera.style.display = 'inline-block';
+        captureImage.style.display = 'none';
+        retakeImage.style.display = 'none';
+    });
+});
+
+// Camera handling for edit employee
+let editStream = null;
+
+function initializeEditCamera() {
+    const editStartCamera = document.getElementById('editStartCamera');
+    const editCaptureImage = document.getElementById('editCaptureImage');
+    const editRetakeImage = document.getElementById('editRetakeImage');
+    const editVideo = document.getElementById('editEmployeeVideo');
+    const editCanvas = document.getElementById('editEmployeeCanvas');
+    const editCapturedImage = document.getElementById('editCapturedImage');
+    const editFaceImageData = document.getElementById('edit_face_image_data');
+
+    editStartCamera.addEventListener('click', function() {
+        navigator.mediaDevices.getUserMedia({ video: true })
+            .then(function(s) {
+                editStream = s;
+                editVideo.srcObject = editStream;
+                editVideo.style.display = 'block';
+                editStartCamera.style.display = 'none';
+                editCaptureImage.style.display = 'inline-block';
+            })
+            .catch(function(err) {
+                console.error("Error accessing camera:", err);
+                alert("Không thể truy cập camera. Vui lòng kiểm tra quyền truy cập.");
+            });
+    });
+
+    editCaptureImage.addEventListener('click', function() {
+        editCanvas.getContext('2d').drawImage(editVideo, 0, 0, editCanvas.width, editCanvas.height);
+        const imageData = editCanvas.toDataURL('image/jpeg');
+        editCapturedImage.src = imageData;
+        editFaceImageData.value = imageData;
+        
+        editVideo.style.display = 'none';
+        editCapturedImage.style.display = 'block';
+        editCaptureImage.style.display = 'none';
+        editRetakeImage.style.display = 'inline-block';
+        
+        if (editStream) {
+            editStream.getTracks().forEach(track => track.stop());
+        }
+    });
+
+    editRetakeImage.addEventListener('click', function() {
+        editFaceImageData.value = '';
+        editCapturedImage.style.display = 'none';
+        editRetakeImage.style.display = 'none';
+        editStartCamera.style.display = 'inline-block';
+    });
+}
+
+// Initialize edit camera when document is loaded
+document.addEventListener('DOMContentLoaded', function() {
+    initializeEditCamera();
+    
+    // Cleanup when edit modal is closed
+    $('#editEmployeeModal').on('hidden.bs.modal', function () {
+        if (editStream) {
+            editStream.getTracks().forEach(track => track.stop());
+        }
+        const editVideo = document.getElementById('editEmployeeVideo');
+        const editCapturedImage = document.getElementById('editCapturedImage');
+        const editFaceImageData = document.getElementById('edit_face_image_data');
+        const editStartCamera = document.getElementById('editStartCamera');
+        const editCaptureImage = document.getElementById('editCaptureImage');
+        const editRetakeImage = document.getElementById('editRetakeImage');
+        
+        editVideo.style.display = 'none';
+        editCapturedImage.style.display = 'none';
+        editFaceImageData.value = '';
+        editStartCamera.style.display = 'inline-block';
+        editCaptureImage.style.display = 'none';
+        editRetakeImage.style.display = 'none';
+    });
+});
 </script>
-{% endblock %} 
+{% endblock %}
